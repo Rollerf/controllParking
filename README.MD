@@ -17,6 +17,7 @@ const char *mqtt_username = "";
 const char *mqtt_password = "";
 const int mqtt_port = ;
 const char *client_name = "";
+const char *topicDoorsEvent = "";
 
 ## Connections
 | Name                | Name in board | GPIO/IDE Arduino name |
