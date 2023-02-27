@@ -20,7 +20,7 @@ void RadarSensor::begin() {
   // set up the pins!
   pinMode(_pin, INPUT);
 
-  sensor = new Switches(1000, _pin);
+  sensor = new Switches(40, _pin);
 }
 
 bool RadarSensor::read(){

@@ -26,23 +26,24 @@ Light light(LIGHT_PIN);
 // CONSTANTS:
 const boolean START = true;
 const boolean RESET = false;
-const char *MANUAL = "MANUAL";
-const char *AUTOMATIC = "AUTOMATIC";
 
 // TIMERS:
 TON *tPublishInfo;
 TON *tCheckConnection;
 TON *tCheckDHT;
-TON *tAutomaticLightOn;
 
+// STATE VARIABLES
+bool night = false;
+
+// modificar la libreria de switches para permitir temporizadores a la desconexion
+// y tener funciones mas comodas
 void setup()
 {
-//  Serial.begin(115200);
+  //  Serial.begin(115200);
 
   // Encender rele:
   pinMode(16, OUTPUT);
   digitalWrite(16, LOW);
-  delay(5000);
 
   WIFIConnection();
 
@@ -56,10 +57,9 @@ void setup()
   radarSensor.begin();
   light.begin();
 
-  tPublishInfo = new TON(1000);
-  tCheckConnection = new TON(52000);
-  tCheckDHT = new TON(52000);
-  tAutomaticLightOn = new TON(120000);
+  tPublishInfo = new TON(10000);
+  tCheckConnection = new TON(30000);
+  tCheckDHT = new TON(60000);
 
   digitalWrite(16, HIGH);
 }
@@ -69,7 +69,7 @@ void publishInfo(float dhtData[], boolean estadoLuz)
   if (tPublishInfo->IN(START))
   {
     StaticJsonDocument<192> jsonDoc;
-    JsonObject recorrido = jsonDoc.createNestedObject("recorrido");
+    JsonObject luz = jsonDoc.createNestedObject("luz");
 
     String payload = "";
     char *estado = "x";
@@ -78,7 +78,9 @@ void publishInfo(float dhtData[], boolean estadoLuz)
     jsonDoc["humedad"] = dhtData[1];
     jsonDoc["humedadRelativa"] = dhtData[2];
 
-    jsonDoc["luz"]["estado"] = estadoLuz;
+    luz["estado"] = estadoLuz;
+    luz["estadoSensor"] = radarSensor.read();
+    luz["noche"] = night;
 
     serializeJson(jsonDoc, payload);
     client.publish(topicState, (char *)payload.c_str());
@@ -140,6 +142,7 @@ void checkMqttConnection()
 
 void loop()
 {
+  checkMqttConnection();
   ArduinoOTA.handle();
   client.loop();
   yield();
@@ -152,11 +155,12 @@ void loop()
 
   publishInfo(dhtData, light.getState());
 
-  if (radarSensor.read() && tPublishInfo->IN(START) && light.getMode() == AUTOMATIC)
+  if (!light.isManual() && night && !light.isOn() && radarSensor.read())
   {
-    light.turnOn();
-    tPublishInfo->IN(RESET);
+    light.turnOnWithTimer();
   }
+
+  light.manageLightState();
 }
 
 void WIFIConnection()
@@ -167,7 +171,7 @@ void WIFIConnection()
   while (WiFi.waitForConnectResult() != WL_CONNECTED)
   {
     Serial.println("Connecting to WiFi..");
-    delay(15000);
+    delay(10000);
     ESP.restart();
   }
 
@@ -230,29 +234,33 @@ void MQTTConnection()
       Serial.print("failed with state ");
       Serial.print(client.state());
       delay(2000);
+      ESP.restart();
     }
   }
 
   client.subscribe(topicCommand);
+  client.subscribe(topicDoorsEvent);
 }
 
-void lightControl(bool night, String mode, bool manualOn)
+void lightControl(bool manual, bool manualOn)
 {
-  light.setMode(mode);
-
-  if (mode == MANUAL && !manualOn)
+  if (manual && !manualOn)
   {
+    light.turnOnManual();
     light.turnOff();
 
     return;
   }
 
-  if (mode == MANUAL && manualOn)
+  if (manual && manualOn)
   {
+    light.turnOnManual();
     light.turnOn();
 
     return;
   }
+
+  light.turnOffManual();
 }
 
 void callback(char *topicCommand, byte *payload, unsigned int length)
@@ -261,6 +269,15 @@ void callback(char *topicCommand, byte *payload, unsigned int length)
   Serial.println(topicCommand);
   Serial.print("Message:");
   String payload_n;
+
+  if (topicCommand[1] == 'o')
+  {
+    if(night){
+      light.turnOnWithTimer();
+    }
+
+    return;
+  }
 
   for (int i = 0; i < length; i++)
   {
@@ -274,8 +291,10 @@ void callback(char *topicCommand, byte *payload, unsigned int length)
   DeserializationError error = deserializeJson(doc, payload_n);
   if (error)
     return;
-  String mode = doc["luz"]["modo"];
-  bool night = doc["luz"]["noche"];
+
+  bool manual = doc["luz"]["manual"];
   bool manualOn = doc["luz"]["on"];
-  lightControl(night, mode, manualOn);
+  night = doc["luz"]["noche"];
+
+  lightControl(manual, manualOn);
 }
